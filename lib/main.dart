@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 void main() {
   runApp(const MyApp());
@@ -60,18 +61,26 @@ class _MyHomePageState extends State<MyHomePage> {
     final Dio dio = Dio();
 
     void _fetchData() async {
-      try {
-        // 获取所有posts
-        final Response response = await dio.get('https://jsonplaceholder.typicode.com/posts');
-        final List<dynamic> data = response.data;
-
-        setState(() {
-          // 将每个post转换为Map并添加到_posts
-          _posts = List<Map<String, dynamic>>.from(data);
-        });
-      } catch (e) {
-        print('Error fetching data: $e');
+      print('獲取麥克風權限');
+      // 開啟麥克風權限
+      var status = await Permission.microphone.request();
+      if (status.isGranted) {
+        print('麥克風權限已開啟');
+      } else {
+        print('麥克風權限未開啟');
       }
+      // try {
+      //   // 获取所有posts
+      //   final Response response = await dio.get('https://jsonplaceholder.typicode.com/posts');
+      //   final List<dynamic> data = response.data;
+      //
+      //   setState(() {
+      //     // 将每个post转换为Map并添加到_posts
+      //     _posts = List<Map<String, dynamic>>.from(data);
+      //   });
+      // } catch (e) {
+      //   print('Error fetching data: $e');
+      // }
     }
 
   @override
