@@ -1,6 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:dio/dio.dart';
 import 'package:permission_handler/permission_handler.dart';
+import 'package:speech_to_text/speech_recognition_result.dart';
+import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 void main() {
   runApp(const MyApp());
@@ -56,49 +58,92 @@ class MyHomePage extends StatefulWidget {
 }
 
 class _MyHomePageState extends State<MyHomePage> {
-// 存储JSON数据的动态数组
-    List<Map<String, dynamic>> _posts = [];
-    final Dio dio = Dio();
+  // 存储JSON数据的动态数组
+  List<Map<String, dynamic>> _posts = [];
+  final Dio dio = Dio();
 
-    void _fetchData() async {
-      print('獲取麥克風權限');
-      // 開啟麥克風權限
-      var status = await Permission.microphone.request();
-      if (status.isGranted) {
-        print('麥克風權限已開啟');
-      } else {
-        print('麥克風權限未開啟');
+  final stt.SpeechToText _speech = stt.SpeechToText();
+  bool _isListening = false;
+  String _text = '按下麥克風開始說話';
+  double _confidence = 1.0;
+
+  @override
+  void initState() {
+    super.initState();
+    _initSpeech();
+    _fetchData();
+  }
+
+  void _initSpeech() async {
+    var status = await Permission.microphone.request();
+    if (status.isGranted) {
+      var speechEnabled = await _speech.initialize(
+        onError: (error) => print('Error: $error'),
+        onStatus: (status) => print('Status: $status'),
+      );
+      if (!speechEnabled) {
+        setState(() {
+          _text = '語音辨識無法初始化';
+        });
       }
-      // try {
-      //   // 获取所有posts
-      //   final Response response = await dio.get('https://jsonplaceholder.typicode.com/posts');
-      //   final List<dynamic> data = response.data;
-      //
-      //   setState(() {
-      //     // 将每个post转换为Map并添加到_posts
-      //     _posts = List<Map<String, dynamic>>.from(data);
-      //   });
-      // } catch (e) {
-      //   print('Error fetching data: $e');
-      // }
+    } else {
+      setState(() {
+        _text = '需要麥克風權限才能使用語音辨識';
+      });
     }
+  }
+
+  void _toggleListening() async {
+    if (!_speech.isAvailable) {
+      setState(() {
+        _text = '語音辨識不可用';
+      });
+      return;
+    }
+
+    if (_isListening) {
+      _speech.stop();
+      setState(() {
+        _isListening = false;
+      });
+    } else {
+      bool started = await _speech.listen(
+        onResult: (result) {
+          setState(() {
+            _text = result.recognizedWords;
+            if (result.hasConfidenceRating && result.confidence > 0) {
+              _confidence = result.confidence;
+            }
+          });
+        },
+        localeId: 'zh_TW', // 設定為繁體中文
+      );
+      setState(() {
+        _isListening = started;
+        if (!started) {
+          _text = '語音辨識啟動失敗';
+        }
+      });
+    }
+  }
+
+  void _fetchData() async {
+    try {
+      final Response response = await dio.get('https://jsonplaceholder.typicode.com/posts');
+      final List<dynamic> data = response.data;
+      setState(() {
+        _posts = List<Map<String, dynamic>>.from(data);
+      });
+    } catch (e) {
+      print('Error fetching data: $e');
+    }
+  }
 
   @override
   Widget build(BuildContext context) {
-    // This method is rerun every time setState is called, for instance as done
-    // by the _incrementCounter method above.
-    //
-    // The Flutter framework has been optimized to make rerunning build methods
-    // fast, so that you can just rebuild anything that needs updating rather
-    // than having to individually change instances of widgets.
     return Scaffold(
       appBar: AppBar(
-        // TRY THIS: Try changing the color here to a specific color (to
-        // Colors.amber, perhaps?) and trigger a hot reload to see the AppBar
-        // change color while the other colors stay the same.
         backgroundColor: Theme.of(context).colorScheme.inversePrimary,
-        // Here we take the value from the MyHomePage object that was created byD
-        // the App.build method, and use it to set our appbar title.
         title: Text(widget.title),
       ),
       body: SingleChildScrollView(
@@ -108,6 +153,23 @@ class _MyHomePageState extends State<MyHomePage> {
             mainAxisAlignment: MainAxisAlignment.center,
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
+              Container(
+                padding: const EdgeInsets.all(16),
+                child: Text(
+                  _text,
+                  style: const TextStyle(fontSize: 18),
+                  textAlign: TextAlign.center,
+                ),
+              ),
+              if (_speech.isListening)
+                Padding(
+                  padding: const EdgeInsets.all(8),
+                  child: Text(
+                    '信心指數: ${(_confidence * 100).toStringAsFixed(1)}%',
+                    style: const TextStyle(fontSize: 14),
+                  ),
+                ),
+              const SizedBox(height: 20),
               for (final Map<String, dynamic> post in _posts)
                 Card(
                   margin: const EdgeInsets.only(bottom: 16.0),
@@ -134,20 +196,21 @@ class _MyHomePageState extends State<MyHomePage> {
         ),
       ),
       floatingActionButton: FloatingActionButton(
-        onPressed: () {
-          _fetchData();
-        },
+        onPressed: _toggleListening,
         elevation: 4.0,
         shape: const CircleBorder(),
         backgroundColor: Colors.cyan.shade400,
-        child: const Icon(Icons.add, color: Colors.black),
+        child: Icon(
+          _isListening ? Icons.mic_off : Icons.mic,
+          color: Colors.black,
+        ),
       ),
       floatingActionButtonLocation: FloatingActionButtonLocation.centerDocked,
       bottomNavigationBar: SafeArea(
-        bottom: false, // This allows content to slide below the navigation bar
+        bottom: false,
         child: BottomAppBar(
           padding: const EdgeInsets.symmetric(horizontal: 16),
-          height: 50, // 从60减小到50
+          height: 50,
           color: Colors.cyan.shade400,
           shape: const CircularNotchedRectangle(),
           notchMargin: 8,
@@ -155,18 +218,16 @@ class _MyHomePageState extends State<MyHomePage> {
             mainAxisSize: MainAxisSize.max,
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: <Widget>[
-              // 左侧第一个按钮
               Padding(
                 padding: const EdgeInsets.only(left: 8.0),
                 child: IconButton(
                   icon: const Icon(Icons.menu, color: Colors.black),
-                  iconSize: 24, // 确保图标大小合适
+                  iconSize: 24,
                   onPressed: () {},
-                  constraints: const BoxConstraints(), // 移除默认的内边距限制
-                  padding: EdgeInsets.zero, // 移除内边距
+                  constraints: const BoxConstraints(),
+                  padding: EdgeInsets.zero,
                 ),
               ),
-              // 左侧第二个按钮 - 距离中间留出足够空间
               Padding(
                 padding: const EdgeInsets.only(right: 48.0),
                 child: IconButton(
@@ -177,7 +238,6 @@ class _MyHomePageState extends State<MyHomePage> {
                   padding: EdgeInsets.zero,
                 ),
               ),
-              // 右侧第一个按钮 - 距离中间留出足够空间
               Padding(
                 padding: const EdgeInsets.only(left: 48.0),
                 child: IconButton(
@@ -188,7 +248,6 @@ class _MyHomePageState extends State<MyHomePage> {
                   padding: EdgeInsets.zero,
                 ),
               ),
-              // 右侧第二个按钮
               Padding(
                 padding: const EdgeInsets.only(right: 8.0),
                 child: IconButton(
