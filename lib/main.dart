@@ -66,6 +66,8 @@ class _MyHomePageState extends State<MyHomePage> {
   bool _isListening = false;
   String _text = '按下麥克風開始說話';
   double _confidence = 1.0;
+  String _debugInfo = ''; // 添加調試信息
+  int _resultCount = 0; // 添加結果計數器
 
   @override
   void initState() {
@@ -74,62 +76,201 @@ class _MyHomePageState extends State<MyHomePage> {
     _fetchData();
   }
 
-  void _initSpeech() async {
-    var status = await Permission.microphone.request();
-    if (status.isGranted) {
-      var speechEnabled = await _speech.initialize(
-        onError: (error) => print('Error: $error'),
-        onStatus: (status) => print('Status: $status'),
-      );
-      if (!speechEnabled) {
-        setState(() {
-          _text = '語音辨識無法初始化';
-        });
-      }
-    } else {
+  @override
+  void dispose() {
+    // 確保在應用程序生命週期結束時停止語音識別
+    if (_isListening) {
+      _speech.stop();
+    }
+    super.dispose();
+  }
+
+  // 添加調試信息
+  void _addDebugInfo(String info) {
+    print('DEBUG: $info');
+    if (mounted) {
       setState(() {
-        _text = '需要麥克風權限才能使用語音辨識';
+        _debugInfo = info;
       });
     }
   }
 
-  void _toggleListening() async {
+  // 初始化語音辨識
+  void _initSpeech() async {
+    try {
+      _addDebugInfo('初始化中...');
+
+      // 請求麥克風權限
+      var status = await Permission.microphone.request();
+      if (status.isGranted) {
+        _addDebugInfo('麥克風權限已獲取');
+
+        var speechEnabled = await _speech.initialize(
+          onError: (error) {
+            _addDebugInfo('錯誤: $error');
+            if (mounted) {
+              setState(() {
+                _isListening = false;
+              });
+            }
+          },
+          onStatus: (status) {
+            _addDebugInfo('狀態: $status');
+            if (!mounted) return;
+
+            // 根據狀態更新 _isListening
+            if (status == 'done' || status == 'notListening') {
+              setState(() {
+                _isListening = false;
+                // 只有當當前文本為初始狀態時才重置文本
+                if (_text == '正在聆聽...' || _text == '啟動中...') {
+                  _text = '按下麥克風開始說話';
+                }
+              });
+            } else if (status == 'listening') {
+              setState(() {
+                _isListening = true;
+                if (_text == '啟動中...') {
+                  _text = '正在聆聽...';
+                }
+              });
+            }
+          },
+        );
+
+        _addDebugInfo('初始化結果: $speechEnabled');
+
+        if (!speechEnabled && mounted) {
+          setState(() {
+            _text = '語音辨識無法初始化';
+          });
+        }
+      } else {
+        _addDebugInfo('麥克風權限被拒絕');
+        if (mounted) {
+          setState(() {
+            _text = '需要麥克風權限才能使用語音辨識';
+          });
+        }
+      }
+    } catch (e) {
+      _addDebugInfo('初始化錯誤: $e');
+      if (mounted) {
+        setState(() {
+          _text = '語音辨識初始化失敗';
+        });
+      }
+    }
+  }
+
+  // 安全地停止聆聽
+  void _stopListening() {
+    try {
+      _addDebugInfo('嘗試停止聆聽');
+      if (_speech.isListening) {
+        _speech.stop();
+        _addDebugInfo('已發送停止命令');
+      }
+
+      if (mounted) {
+        setState(() {
+          _isListening = false;
+          // 如果沒有識別到任何文字，恢復到初始提示
+          if (_text == '正在聆聽...' || _text == '啟動中...') {
+            _text = '按下麥克風開始說話';
+          }
+          _addDebugInfo('已更新UI為停止狀態，文本: $_text');
+        });
+      }
+    } catch (e) {
+      _addDebugInfo('停止聆聽錯誤: $e');
+    }
+  }
+
+  // 安全地開始聆聽
+  Future<void> _startListening() async {
+    _resultCount = 0; // 重置結果計數器
+
     if (!_speech.isAvailable) {
-      setState(() {
-        _text = '語音辨識不可用';
-      });
+      _addDebugInfo('語音辨識不可用');
+      if (mounted) {
+        setState(() {
+          _text = '語音辨識不可用';
+        });
+      }
       return;
     }
 
-    if (_isListening) {
-      _speech.stop();
+    // 先設定為"啟動中..."，避免狀態延遲
+    if (mounted) {
       setState(() {
-        _isListening = false;
+        _text = '啟動中...';
+        _addDebugInfo('UI已更新為啟動狀態');
       });
-    } else {
-      bool started = await _speech.listen(
+    }
+
+    try {
+      _addDebugInfo('嘗試開始聆聽');
+      // 使用 try-catch 並忽略返回值，完全依賴 onStatus 回調
+      _speech.listen(
         onResult: (result) {
-          setState(() {
-            _text = result.recognizedWords;
-            if (result.hasConfidenceRating && result.confidence > 0) {
-              _confidence = result.confidence;
-            }
-          });
+          _resultCount++;
+          _addDebugInfo('收到結果 #$_resultCount: ${result.recognizedWords}, 最終=${result.finalResult}');
+
+          // 移除條件檢查，確保始終更新文本
+          if (mounted) {
+            setState(() {
+              if (result.recognizedWords.isNotEmpty) {
+                _text = result.recognizedWords;
+                _addDebugInfo('已更新文本: $_text');
+              }
+              if (result.hasConfidenceRating && result.confidence > 0) {
+                _confidence = result.confidence;
+                _addDebugInfo('信心指數: $_confidence');
+              }
+            });
+          }
         },
+        onSoundLevelChange: (level) {
+          // 可選：監控聲音級別變化
+          // print('Sound level: $level');
+        },
+        listenMode: stt.ListenMode.confirmation, // 使用確認模式以提高準確性
         localeId: 'zh_TW', // 設定為繁體中文
+        listenFor: const Duration(seconds: 60), // 增加最長聆聽時間
+        pauseFor: const Duration(seconds: 5), // 增加暫停時間
+        cancelOnError: false, // 出錯時不自動取消
+        partialResults: true, // 啟用部分結果
       );
-      setState(() {
-        _isListening = started;
-        if (!started) {
-          _text = '語音辨識啟動失敗';
-        }
-      });
+
+      _addDebugInfo('已發送聆聽請求');
+    } catch (e) {
+      _addDebugInfo('開始聆聽錯誤: $e');
+      if (mounted) {
+        setState(() {
+          _isListening = false;
+          _text = '語音辨識出錯';
+        });
+      }
+    }
+  }
+
+  // 切換語音辨識狀態
+  void _toggleListening() {
+    _addDebugInfo('切換聆聽狀態，當前: $_isListening');
+
+    if (_isListening) {
+      _stopListening();
+    } else {
+      _startListening();
     }
   }
 
   void _fetchData() async {
     try {
-      final Response response = await dio.get('https://jsonplaceholder.typicode.com/posts');
+      final Response response = await dio.get(
+        'https://jsonplaceholder.typicode.com/posts',
+      );
       final List<dynamic> data = response.data;
       setState(() {
         _posts = List<Map<String, dynamic>>.from(data);
@@ -161,7 +302,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   textAlign: TextAlign.center,
                 ),
               ),
-              if (_speech.isListening)
+              if (_isListening && _confidence > 0)
                 Padding(
                   padding: const EdgeInsets.all(8),
                   child: Text(
@@ -169,7 +310,6 @@ class _MyHomePageState extends State<MyHomePage> {
                     style: const TextStyle(fontSize: 14),
                   ),
                 ),
-              const SizedBox(height: 20),
               for (final Map<String, dynamic> post in _posts)
                 Card(
                   margin: const EdgeInsets.only(bottom: 16.0),
